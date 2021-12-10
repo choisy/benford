@@ -1,5 +1,6 @@
 ---
 title: "Using the Benford's law to assess the quality of COVID-19 reported data in Vietnam"
+date: "`r format(Sys.time(), '%d %B %Y')`"
 output:
   html_document:
     toc: true
@@ -171,7 +172,141 @@ names(rogier) <- str_replace(names(rogier), "Hue", "Thua Thien Hue")
 
 ### NCSC's COVID-19 data
 
-To be completed.
+Data automatically collected from [NCSC](https://covid.ncsc.gov.vn):
+
+```{r}
+ncsc <- readRDS(paste0(clean_folder, "NCSC data/covid.rds")) %>% 
+  filter(var == "incidence") %>% 
+  select(-var) %>% 
+  mutate_at("province", str_replace, "TP HCM", "Ho Chi Minh")
+```
+
+which looks like this:
+
+```{r}
+ncsc
+```
+
+### Comparing Rogier's and NCSC data
+
+A long format of Rogier's data:
+
+```{r}
+rogier_long <- pivot_longer(rogier, -date, "province", values_to = "n_rogier")
+```
+
+Merging Rogier's and NCSC's data:
+
+```{r}
+two_sources <- rogier_long %>% 
+  full_join(ncsc, c("date", "province")) %>% 
+  mutate_at(vars(starts_with("n")), replace_na, 0) %>% 
+  filter(n_rogier > 0 | n > 0)
+```
+
+Plots to compare the two sources of data:
+
+```{r fig.width = 2 * 4.24725, fig.height = 1.2 * 10 * 3.5 / 16}
+par(mfrow = c(1, 3), plt = c(.15, .9, .17, .9))
+
+two_sources %$% 
+  plot(n_rogier, n, xlab = "Rogier's data", ylab = "NCSC data",
+       col = adjustcolor(4, .5))
+abline(0, 1)
+
+two_sources %$% 
+  plot(n_rogier, n, xlab = "Rogier's data", ylab = "NCSC data",
+       col = adjustcolor(4, .5), xlim = c(0, 9000), ylim = c(0, 9000))
+abline(0, 1)
+
+two_sources %>% 
+  mutate_at(vars(starts_with("n")), ~ .x + .1) %$% 
+  plot(n_rogier, n, xlab = "Rogier's data", ylab = "NCSC data",
+       col = adjustcolor(4, .5), log = "xy")
+abline(0, 1)
+```
+
+Comparing the dates of zero-counts for the two data sets:
+
+```{r}
+two_sources %>% 
+  filter(n < 1) %>% 
+  pull(date) %>% 
+  plot(., jitter(rep(1, length(.))), axes = FALSE, col = 2, ann = FALSE,
+       xlim = ymd(c(20200101, 20211231)), ylim = c(.8, 1.1))
+
+two_sources %>% 
+  filter(n_rogier < 1) %>% 
+  pull(date) %>% 
+  points(., jitter(rep(.9, length(.))), col = 4)
+
+month_val <- seq(1, 12, 2)
+axis(1,
+     ydm(paste0("2020-1-", month_val), paste0("2021-1-", month_val), "2022-1-1"),
+     c(paste0(month.abb[month_val], "-20"), paste0(month.abb[month_val], "-21"), "Jan-22"))
+
+month_val2 <- 1:12
+abline(v = ydm(paste0("2020-1-", month_val2), paste0("2021-1-", month_val2), "2022-1-1")[-c(1, 2)])
+
+text(ymd(20200115), 1, "NCSC", col = 2)
+text(ymd(20200115), .9, "Rogier", col = 4)
+```
+
+The distribution of the counts in one data set when it's 0 in the other data set:
+
+```{r fig.width = 2 * 4.24725, fig.height = 1.5 * 10 * 3.5 / 16}
+par(mfrow = c(1, 2), plt = c(.15, .95, .17, .95))
+
+hist2 <- function(..., color) {
+  hist(..., n = 1000, col = color, border = color, yaxs = "i",
+       main = NA, ylab = "frequency")
+}
+
+two_sources %>% 
+  filter(n_rogier < 1) %>% 
+  pull(n) %>% 
+  hist2(color = 4, xlab = "value in NCSC when 0 count in Rogier")
+
+two_sources %>% 
+  filter(n < 1) %>% 
+  pull(n_rogier) %>% 
+  hist2(color = 2, xlab = "value in Rogier when 0 count in NCSC")
+```
+
+A function to plot the time series from the 2 sources for 1 province:
+
+```{r}
+plot_prov_ts <- function(prov, xlim = ymd(c(20200101, 20220101)), lwd = 1) {
+  ncsc %>% 
+    filter(province == prov) %$%
+    plot(date, n, type = "l", col = 2, xlab = NA, ylab = "incidence",
+         xlim = xlim, lwd = lwd)
+
+  rogier_long %>% 
+    filter(province == prov) %$%
+    lines(date, n_rogier, col = 4, lty = 2, lwd = lwd)
+}
+```
+
+Comparing the time series of the two data sets for Ho Chi Minh city:
+
+```{r}
+plot_prov_ts("Ho Chi Minh", ymd(c(20210601, 20220101)), lwd = 2)
+legend("topright", legend = c("NCSC", "Rogier"),
+       col = c(2, 4), lty = 1:2, bty = "n", lwd = 2)
+```
+
+Comparing for all the provinces:
+
+```{r fig.width = 2 * 4.24725, fig.height = 20 * 3.5}
+par(mfrow = c(32, 2), plt = c(.2, .97, .17, .9))
+
+ncsc %>% 
+  pull(province) %>% 
+  unique() %>% 
+  sort() %>% 
+  walk(~ {plot_prov_ts(.x); title(.x, line = -1)})
+```
 
 ## Analyzing Rogier's data
 
@@ -329,6 +464,7 @@ Group 3 is then:
 
 ```{r}
 group3 <- wave4 %>% 
+  magrittr::extract(wave4mekong$province) %>% 
   rowSums() %>% 
   list()
 ```
@@ -365,4 +501,64 @@ walk2(benford_analyses_rogier_4groups,
 
 ## Analyzing NCSC's data
 
-To be done.
+### All the data
+
+```{r fig.width = 2 * 4.24725, fig.height = 10 * 3.5}
+ncsc_wide <- pivot_wider(ncsc, names_from = province, values_from = n)
+  
+ncsc1 <- ncsc_wide %>% 
+  select(-date) %>% 
+  map(~ .x[.x > 0])
+
+benford_analyses_ncsc1 <- map(ncsc1, benford, number.of.digits = 1)
+
+table_ncsc1 <- make_statistics_table(benford_analyses_ncsc1)
+print(table_ncsc1, n = Inf)
+
+par(mfrow = c(16, 4), plt = c(.2, .97, .17, .9))
+walk2(benford_analyses_ncsc1,
+      names(benford_analyses_ncsc1),
+      plot_digits_distribution)
+```
+
+### Specific comparisons
+
+```{r fig.width = 2 * 4.24725, fig.height = 10 * 3.5 / 16}
+ncsc_group1 <- ncsc_wide %>% 
+  transmute(date, n = `Hai Duong` + `Quang Ninh`) %>% 
+  filter(ymd(20210101) < date, date < ymd(20210401)) %>% 
+  select(-date) %>% 
+  map(~ .x[.x > 0])
+
+ncsc_group2 <- ncsc_wide %>% 
+  transmute(date, n = `Bac Giang` + `Bac Ninh`) %>% 
+  filter(ymd(20210401) < date, date < ymd(20210801)) %>% 
+  select(-date) %>% 
+  map(~ .x[.x > 0])
+
+ncsc_group3 <- ncsc_wide %>% 
+  filter(ymd(20210501) < date, date < ymd(20211015)) %>% 
+  select(-date) %>% 
+  magrittr::extract(wave4mekong$province) %>% 
+  rowSums() %>% 
+  list()
+
+ncsc_group4 <- ncsc_wide %>% 
+  filter(date > ymd(20211015)) %>% 
+  select(-date) %>% 
+  rowSums() %>% 
+  list()
+
+ncsc_groups <- c(ncsc_group1, ncsc_group2, ncsc_group3, ncsc_group4) %>% 
+  setNames(paste0("group", 1:4))
+
+benford_analyses_ncsc_4groups <- map(ncsc_groups, benford, number.of.digits = 1)
+
+make_statistics_table(benford_analyses_ncsc_4groups)
+
+par(mfrow = c(1, 4), plt = c(.2, .97, .17, .9))
+walk2(benford_analyses_ncsc_4groups,
+      names(benford_analyses_ncsc_4groups),
+      plot_digits_distribution)
+```
+
